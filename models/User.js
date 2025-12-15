@@ -5,6 +5,14 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
 
+    email: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+    },
+
     phone: {
       type: String,
       required: true,
@@ -23,6 +31,7 @@ const userSchema = new mongoose.Schema(
     parentPhone: { type: String, default: null },
     session: { type: String, default: null },
     branch: { type: String, default: null },
+    college: { type: String, default: null },
 
     // Student hostel type:
     hostelType: {

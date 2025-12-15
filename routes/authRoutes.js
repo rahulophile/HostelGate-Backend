@@ -5,6 +5,11 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const {
+  requestEmailOtp,
+  verifyEmailOtp,
+  validateEmailOtpToken,
+} = require("../utils/emailOtpManager");
 
 // Generate JWT token
 const generateToken = (id) => {
@@ -12,6 +17,116 @@ const generateToken = (id) => {
     expiresIn: "30d",
   });
 };
+
+const findUserByIdentifier = async (rawInput = "") => {
+  const trimmed = rawInput.trim();
+
+  if (!trimmed) {
+    return { user: null, normalized: null };
+  }
+
+  if (trimmed.includes("@")) {
+    const normalizedEmail = trimmed.toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+    return { user, normalized: { email: normalizedEmail } };
+  }
+
+  const cleanPhone = trimmed.replace(/\D/g, "");
+  const user = await User.findOne({ phone: cleanPhone });
+  return { user, normalized: { phone: cleanPhone } };
+};
+
+// ==============================
+//  EMAIL OTP (SEND)
+// ==============================
+router.post("/email-otp/send", async (req, res) => {
+  try {
+    const { email, purpose } = req.body;
+
+    if (!email || !purpose) {
+      return res
+        .status(400)
+        .json({ message: "Email and purpose are required for OTP" });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    if (!["register", "forgot", "login"].includes(purpose)) {
+      return res.status(400).json({ message: "Invalid OTP purpose" });
+    }
+
+    if (purpose === "register") {
+      const existingEmail = await User.findOne({ email: normalizedEmail });
+      if (existingEmail) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+    }
+
+    if (purpose === "forgot") {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (!existingUser) {
+        return res
+          .status(404)
+          .json({ message: "No account found with the provided email" });
+      }
+    }
+
+    if (purpose === "login") {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (!existingUser) {
+        return res
+          .status(404)
+          .json({ message: "No account found with the provided email" });
+      }
+    }
+
+    const { expiresAt } = await requestEmailOtp({
+      email: normalizedEmail,
+      purpose,
+    });
+
+    return res.status(200).json({
+      message: "OTP sent to email",
+      expiresAt,
+    });
+  } catch (error) {
+    console.error("Email OTP send error:", error.message);
+    return res.status(500).json({ message: "Could not send OTP" });
+  }
+});
+
+// ==============================
+//  EMAIL OTP (VERIFY)
+// ==============================
+router.post("/email-otp/verify", async (req, res) => {
+  try {
+    const { email, purpose, code } = req.body;
+
+    if (!email || !purpose || !code) {
+      return res
+        .status(400)
+        .json({ message: "Email, purpose and code are required" });
+    }
+
+    if (!["register", "forgot", "login"].includes(purpose)) {
+      return res.status(400).json({ message: "Invalid OTP purpose" });
+    }
+
+    const token = await verifyEmailOtp({
+      email,
+      purpose,
+      code,
+    });
+
+    return res.status(200).json({
+      message: "OTP verified",
+      emailOtpToken: token,
+    });
+  } catch (error) {
+    console.error("Email OTP verify error:", error.message);
+    return res.status(400).json({ message: error.message });
+  }
+});
 
 // ==============================
 //  REGISTER STUDENT
@@ -22,6 +137,7 @@ router.post("/register-student", async (req, res) => {
 
     const {
       name,
+      email,
       phone,
       password,
       gender,
@@ -30,16 +146,38 @@ router.post("/register-student", async (req, res) => {
       session,
       branch,
       hostelType,
+      emailOtpToken,
+      college,
     } = req.body;
 
-    if (!name || !phone || !password || !gender || !hostelType) {
+    if (!name || !email || !phone || !password || !gender || !hostelType) {
       return res.status(400).json({
-        message: "Name, phone, password, gender and hostelType are required",
+        message: "Name, email, phone, password, gender and hostelType are required",
       });
     }
 
-    const existing = await User.findOne({ phone });
-    if (existing) {
+    if (!emailOtpToken) {
+      return res.status(400).json({
+        message: "Email verification is required before registration",
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedPhone = phone.trim().replace(/\D/g, "");
+
+    try {
+      validateEmailOtpToken(emailOtpToken, normalizedEmail, "register");
+    } catch (tokenError) {
+      return res.status(400).json({ message: tokenError.message });
+    }
+
+    const existingByEmail = await User.findOne({ email: normalizedEmail });
+    if (existingByEmail) {
+      return res.status(400).json({ message: "Email already registered" });
+    }
+
+    const existingByPhone = await User.findOne({ phone: normalizedPhone });
+    if (existingByPhone) {
       return res.status(400).json({ message: "Phone already registered" });
     }
 
@@ -47,6 +185,7 @@ router.post("/register-student", async (req, res) => {
 
     const newUser = await User.create({
       name,
+      email: normalizedEmail,
       phone,
       passwordHash: hashedPassword,
       gender,
@@ -55,6 +194,7 @@ router.post("/register-student", async (req, res) => {
       session,
       branch,
       hostelType,
+      college,
       role: "student",
       isApproved: true,
     });
@@ -67,14 +207,56 @@ router.post("/register-student", async (req, res) => {
       user: {
         id: newUser._id,
         name: newUser.name,
+        email: newUser.email,
         phone: newUser.phone,
         role: newUser.role,
         hostelType: newUser.hostelType,
+        college: newUser.college,
       },
     });
   } catch (error) {
     console.error("Register student error:", error.message);
     return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ==============================
+//  RESET PASSWORD (Email OTP verified)
+// ==============================
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, newPassword, emailOtpToken } = req.body;
+
+    if (!email || !newPassword || !emailOtpToken) {
+      return res.status(400).json({
+        message: "Email, new password, and OTP verification token are required",
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    try {
+      validateEmailOtpToken(emailOtpToken, normalizedEmail, "forgot");
+    } catch (tokenError) {
+      return res.status(400).json({ message: tokenError.message });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ message: "Account not found for the provided email" });
+    }
+
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    return res
+      .status(200)
+      .json({ message: "Password reset successful. You can now login." });
+  } catch (error) {
+    console.error("Reset password error:", error.message);
+    return res.status(500).json({ message: "Could not reset password" });
   }
 });
 
@@ -132,43 +314,118 @@ router.post("/register-admin", async (req, res) => {
 });
 
 // ==============================
-//  LOGIN (STUDENT + ADMIN + GUARD)
+//  LOGIN STEP 1: REQUEST OTP (STUDENT + ADMIN + GUARD)
 // ==============================
-router.post("/login", async (req, res) => {
+router.post("/login/request-otp", async (req, res) => {
   try {
-    console.log("POST /api/auth/login hit");
-    console.log("Request body:", { phone: req.body.phone, hasPassword: !!req.body.password });
+    const { identifier, password } = req.body;
 
-    const { phone, password } = req.body;
-
-    if (!phone || !password) {
-      console.log("Missing fields - phone:", !!phone, "password:", !!password);
-      return res.status(400).json({ message: "Phone and password required" });
+    if (!identifier || !password) {
+      return res
+        .status(400)
+        .json({ message: "Identifier and password are required" });
     }
 
-    // Trim phone and remove any spaces
-    const cleanPhone = phone.trim().replace(/\s+/g, "");
-    console.log("Searching for user with phone:", cleanPhone);
+    const { user, normalized } = await findUserByIdentifier(identifier);
 
-    const user = await User.findOne({ phone: cleanPhone });
     if (!user) {
-      console.log("User not found with phone:", cleanPhone);
-      // Check if any user exists with similar phone
-      const allUsers = await User.find().select("phone role").limit(5);
-      console.log("Sample users in DB:", allUsers.map(u => ({ phone: u.phone, role: u.role })));
-      return res.status(400).json({ message: "User not found. Please check your phone number." });
+      return res
+        .status(400)
+        .json({ message: "Account not found. Please check your details." });
     }
-
-    console.log("User found:", { id: user._id, name: user.name, role: user.role });
 
     const passMatch = await bcrypt.compare(password, user.passwordHash);
     if (!passMatch) {
-      console.log("Password mismatch for user:", user._id);
       return res.status(400).json({ message: "Incorrect password" });
     }
 
+    if (!user.email) {
+      return res.status(400).json({
+        message:
+          "Email not found for this account. Please contact support to update your email before enabling OTP login.",
+      });
+    }
+
+    const { expiresAt } = await requestEmailOtp({
+      email: user.email,
+      purpose: "login",
+    });
+
+    const pendingLoginToken = jwt.sign(
+      {
+        userId: user._id.toString(),
+        type: "loginPending",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "10m" }
+    );
+
+    const [localPart, domainPart] = user.email.split("@");
+    let maskedEmail = user.email;
+
+    if (localPart && domainPart) {
+      maskedEmail = `${localPart[0]}***@${domainPart}`;
+    }
+
+    return res.status(200).json({
+      message: "OTP sent to your registered email",
+      pendingLoginToken,
+      expiresAt,
+      identifierType: normalized?.email ? "email" : "phone",
+      loginEmail: user.email,
+      maskedEmail,
+    });
+  } catch (error) {
+    console.error("Login OTP request error:", error.message);
+    return res.status(500).json({ message: "Could not send login OTP" });
+  }
+});
+
+// ==============================
+//  LOGIN STEP 2: COMPLETE AFTER OTP VERIFICATION
+// ==============================
+router.post("/login/complete", async (req, res) => {
+  try {
+    const { pendingLoginToken, emailOtpToken } = req.body;
+
+    if (!pendingLoginToken || !emailOtpToken) {
+      return res.status(400).json({
+        message: "OTP verification and pending login tokens are required",
+      });
+    }
+
+    let pendingPayload;
+    try {
+      pendingPayload = jwt.verify(pendingLoginToken, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(400).json({ message: "Session expired. Please login again." });
+    }
+
+    if (pendingPayload?.type !== "loginPending" || !pendingPayload?.userId) {
+      return res.status(400).json({ message: "Invalid login session" });
+    }
+
+    const user = await User.findById(pendingPayload.userId);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ message: "Account not found. Please login again." });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({
+        message: "Email missing for this account. Cannot complete OTP login.",
+      });
+    }
+
+    try {
+      validateEmailOtpToken(emailOtpToken, user.email, "login");
+    } catch (tokenError) {
+      return res.status(400).json({ message: tokenError.message });
+    }
+
     const token = generateToken(user._id);
-    console.log("Login successful for user:", user._id);
 
     return res.status(200).json({
       message: "Login successful",
@@ -176,6 +433,7 @@ router.post("/login", async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        email: user.email,
         phone: user.phone,
         role: user.role,
         hostelType: user.hostelType || null,
@@ -185,12 +443,12 @@ router.post("/login", async (req, res) => {
         branch: user.branch || null,
         session: user.session || null,
         gender: user.gender || null,
+        college: user.college || null,
       },
     });
   } catch (error) {
-    console.error("Login error:", error.message);
-    console.error("Error stack:", error.stack);
-    return res.status(500).json({ message: "Server error" });
+    console.error("Login complete error:", error.message);
+    return res.status(500).json({ message: "Could not complete login" });
   }
 });
 

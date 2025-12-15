@@ -29,6 +29,47 @@ const computeDistanceMeters = (lat1, lon1, lat2, lon2) => {
 };
 
 // ==============================
+//  VALIDATE GATE QR BEFORE CHECK-IN/OUT
+//  GET /api/student/gate-info/:code
+// ==============================
+router.get("/gate-info/:code", authMiddleware, async (req, res) => {
+  try {
+    const rawCode = req.params.code || "";
+    const gateCode = rawCode.trim();
+
+    if (!gateCode) {
+      return res.status(400).json({ message: "Gate code is required" });
+    }
+
+    const gate = await Gate.findOne({ code: gateCode, isActive: true }).lean();
+
+    if (!gate) {
+      return res.status(404).json({ message: "Gate QR not recognized" });
+    }
+
+    if (req.user?.hostelType && gate.hostelType !== req.user.hostelType) {
+      return res.status(403).json({
+        message: "This gate is not assigned to your hostel",
+      });
+    }
+
+    return res.json({
+      gate: {
+        id: gate._id,
+        code: gate.code,
+        name: gate.name,
+        hostelType: gate.hostelType,
+        latitude: gate.latitude ?? null,
+        longitude: gate.longitude ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("Gate info lookup error:", error.message);
+    return res.status(500).json({ message: "Could not validate gate QR" });
+  }
+});
+
+// ==============================
 //  CHECK IN / OUT with location
 //  POST /api/student/check
 //  body: { gateCode, direction, lat, lng, reason? }
@@ -267,7 +308,16 @@ router.get("/me", authMiddleware, async (req, res) => {
 router.put("/me", authMiddleware, async (req, res) => {
   try {
     const user = req.user;
-    const { name, phone, parentPhone, roomNumber, branch, session, gender } = req.body;
+    const {
+      name,
+      phone,
+      parentPhone,
+      roomNumber,
+      branch,
+      session,
+      gender,
+      college,
+    } = req.body;
 
     const updateData = {};
     if (name) updateData.name = name;
@@ -277,6 +327,7 @@ router.put("/me", authMiddleware, async (req, res) => {
     if (branch !== undefined) updateData.branch = branch;
     if (session !== undefined) updateData.session = session;
     if (gender !== undefined) updateData.gender = gender;
+    if (college !== undefined) updateData.college = college;
 
     const updatedUser = await User.findByIdAndUpdate(
       user._id,
