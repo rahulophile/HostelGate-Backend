@@ -5,6 +5,7 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const authMiddleware = require("../middleware/authMiddleware");
 const {
   requestEmailOtp,
   verifyEmailOtp,
@@ -310,6 +311,41 @@ router.post("/register-admin", async (req, res) => {
   } catch (error) {
     console.error("Register admin error:", error.message);
     return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ==============================
+//  CURRENT SESSION
+// ==============================
+router.get("/me", authMiddleware, async (req, res) => {
+  try {
+    const user = req.user;
+
+    if (!user) {
+      return res.status(404).json({ message: "Session user not found" });
+    }
+
+    return res.status(200).json({
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email || null,
+        phone: user.phone || null,
+        role: user.role,
+        hostelType: user.hostelType || null,
+        assignedHostel: user.assignedHostel || null,
+        roomNumber: user.roomNumber || null,
+        parentPhone: user.parentPhone || null,
+        branch: user.branch || null,
+        session: user.session || null,
+        gender: user.gender || null,
+        college: user.college || null,
+        isApproved: user.isApproved ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("Auth session error:", error.message);
+    return res.status(500).json({ message: "Could not verify session" });
   }
 });
 
