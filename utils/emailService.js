@@ -17,11 +17,16 @@ const getTransporter = () => {
   }
 
   cachedTransporter = nodemailer.createTransport({
-    service: "gmail",
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true, // port 465 = SSL (port 587 cloud servers pe block hota hai)
     auth: {
       user: EMAIL_USER,
       pass: EMAIL_PASS,
     },
+    connectionTimeout: 10000, // 10s mein connect nahi hua toh fail
+    socketTimeout: 15000,     // 15s mein response nahi aaya toh fail
+    greetingTimeout: 10000,
   });
 
   return cachedTransporter;

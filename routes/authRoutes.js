@@ -91,8 +91,8 @@ router.post("/email-otp/send", async (req, res) => {
       expiresAt,
     });
   } catch (error) {
-    console.error("Email OTP send error:", error.message);
-    return res.status(500).json({ message: "Could not send OTP" });
+    console.error("Email OTP send error:", error.message, error.code || "");
+    return res.status(500).json({ message: `Could not send OTP: ${error.message}` });
   }
 });
 
