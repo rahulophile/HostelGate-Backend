@@ -19,8 +19,8 @@ const getTransporter = () => {
   // Brevo SMTP settings
   cachedTransporter = nodemailer.createTransport({
     host: "smtp-relay.brevo.com",
-    port: 587,
-    secure: false, // Requires secure: false for port 587 (STARTTLS)
+    port: 2525, // Render port 587 block karta hai, 2525 alternative port hai Cloud setups ke liye
+    secure: false, // Requires secure: false for port 2525 (STARTTLS)
     auth: {
       user: "a445ee001@smtp-brevo.com", // Brevo assigned SMTP username
       pass: BREVO_SMTP_KEY,
