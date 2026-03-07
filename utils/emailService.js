@@ -1,11 +1,11 @@
 const nodemailer = require("nodemailer");
 
-const EMAIL_USER = process.env.EMAIL_SERVICE_USER;
-const EMAIL_PASS = process.env.EMAIL_SERVICE_PASS;
+const EMAIL_USER = process.env.EMAIL_SERVICE_USER; // Brevo SMTP login is the email used to signup
+const BREVO_SMTP_KEY = process.env.BREVO_SMTP_KEY;
 
-if (!EMAIL_USER || !EMAIL_PASS) {
+if (!EMAIL_USER || !BREVO_SMTP_KEY) {
   console.warn(
-    "Email service credentials are missing. Set EMAIL_SERVICE_USER and EMAIL_SERVICE_PASS in .env"
+    "Email service credentials are missing. Set EMAIL_SERVICE_USER and BREVO_SMTP_KEY in .env"
   );
 }
 
@@ -16,24 +16,24 @@ const getTransporter = () => {
     return cachedTransporter;
   }
 
+  // Brevo SMTP settings
   cachedTransporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true, // port 465 = SSL (port 587 cloud servers pe block hota hai)
+    host: "smtp-relay.brevo.com",
+    port: 587,
+    secure: false, // Requires secure: false for port 587 (STARTTLS)
     auth: {
-      user: EMAIL_USER,
-      pass: EMAIL_PASS,
+      user: "a445ee001@smtp-brevo.com", // Brevo assigned SMTP username
+      pass: BREVO_SMTP_KEY,
     },
-    connectionTimeout: 10000, // 10s mein connect nahi hua toh fail
-    socketTimeout: 15000,     // 15s mein response nahi aaya toh fail
-    greetingTimeout: 10000,
+    connectionTimeout: 10000,
+    socketTimeout: 15000,
   });
 
   return cachedTransporter;
 };
 
 const sendOtpEmail = async ({ to, code, purpose }) => {
-  if (!EMAIL_USER || !EMAIL_PASS) {
+  if (!EMAIL_USER || !BREVO_SMTP_KEY) {
     throw new Error("Email service is not configured");
   }
 
@@ -45,7 +45,8 @@ const sendOtpEmail = async ({ to, code, purpose }) => {
       : "reset your password";
 
   const mailOptions = {
-    from: `HostelGate <${EMAIL_USER}>`,
+    // Brevo allows you to send from any email address (usually the one registered)
+    from: `HostelGate <${EMAIL_USER}>`, 
     to,
     subject: "Your HostelGate verification code",
     html: `
@@ -58,7 +59,13 @@ const sendOtpEmail = async ({ to, code, purpose }) => {
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email sent via Brevo:", info.messageId);
+  } catch (error) {
+    console.error("Brevo email send error:", error);
+    throw new Error(error.message || "Failed to send email via Brevo");
+  }
 };
 
 module.exports = { sendOtpEmail };
